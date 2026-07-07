@@ -56,6 +56,12 @@ export async function ensurePlayer(client, interaction) {
     const guildData = getGuildMusicData(guildId);
     let player = getPlayer(client, guildId);
 
+    // Agar player idle hai (queue khatam ho gayi), destroy karke fresh banao
+    if (player && !player.playing && !player.paused && !player.current) {
+        try { player.destroy(); } catch { /* already gone */ }
+        player = null;
+    }
+
     if (!player) {
         player = client.riffy.createConnection({
             guildId,
@@ -63,9 +69,10 @@ export async function ensurePlayer(client, interaction) {
             textChannel: interaction.channel.id,
             deaf: true,
         });
-        guildData.playerChannelId = interaction.channel.id;
     }
 
+    // Har baar channel update karo
+    guildData.playerChannelId = interaction.channel.id;
     player.setVolume(guildData.volume);
     return { player, guildData };
 }
