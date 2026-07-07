@@ -5,9 +5,10 @@ import { getGuildMusicData, clearUpdateInterval } from './playerStore.js';
 import {
     buildNowPlayingEmbed,
     buildPlayerButtonRows,
+    fetchSyncedLyrics,
 } from './musicEmbeds.js';
 
-const UPDATE_INTERVAL_MS = 15 * 1000;
+const UPDATE_INTERVAL_MS = 5 * 1000;
 const IDLE_DISCONNECT_MS = 30 * 1000;
 
 async function editOrSendPlayerMessage(client, guildData, channelId, embed, components) {
@@ -104,6 +105,14 @@ export function setupPlayerHandler(client) {
                 guildData.idleTimeout = null;
             }
 
+            // Lyrics fetch (background mein, song rokta nahi)
+            guildData.lyrics = null;
+            fetchSyncedLyrics(
+                track?.info?.title || '',
+                track?.info?.author || '',
+                track?.info?.length || 0,
+            ).then(lyrics => { guildData.lyrics = lyrics; }).catch(() => {});
+
             const embed = buildNowPlayingEmbed(track, player, guildData);
             const components = buildPlayerButtonRows(player, guildData);
             const channelId = guildData.playerChannelId || player.textChannel;
@@ -118,6 +127,7 @@ export function setupPlayerHandler(client) {
         try {
             const guildData = getGuildMusicData(player.guildId);
             clearUpdateInterval(guildData);
+            guildData.lyrics = null;
 
             if (guildData.autoplay) {
                 player.autoplay(player);
@@ -162,6 +172,7 @@ export function setupPlayerHandler(client) {
     client.riffy.on('playerDisconnect', async (player) => {
         const guildData = getGuildMusicData(player.guildId);
         clearUpdateInterval(guildData);
+        guildData.lyrics = null;
 
         if (guildData.playerMessageId && guildData.playerChannelId) {
             try {
