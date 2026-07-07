@@ -15,6 +15,7 @@ export class GuildMusicData {
         this.idleTimeout = null;
         this.wasPaused = false;
         this.stopConfirmPending = null;
+        this.lyrics = null;
     }
 }
 
