@@ -57,6 +57,35 @@ function buildProgressBar(positionMs, durationMs, barLength = 20) {
     return '━'.repeat(filled) + '─'.repeat(empty);
 }
 
+export async function fetchSyncedLyrics(title, artist, durationMs) {
+    try {
+        const url = `https://lrclib.net/api/get?track_name=${encodeURIComponent(title)}&artist_name=${encodeURIComponent(artist)}&duration=${Math.floor(durationMs / 1000)}`;
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (!data.syncedLyrics) return null;
+        return data.syncedLyrics.split('\n')
+            .map(line => {
+                const m = line.match(/\[(\d+):(\d+(?:\.\d+)?)\](.*)/);
+                if (!m) return null;
+                return { time: (parseInt(m[1]) * 60 + parseFloat(m[2])) * 1000, text: m[3].trim() };
+            })
+            .filter(l => l && l.text);
+    } catch {
+        return null;
+    }
+}
+
+export function getCurrentLyricLine(lyrics, positionMs) {
+    if (!lyrics?.length) return null;
+    let current = null;
+    for (const line of lyrics) {
+        if (line.time <= positionMs) current = line.text;
+        else break;
+    }
+    return current;
+}
+
 export function buildNowPlayingEmbed(track, player, guildData) {
     const requester = track?.info?.requester;
     const requesterLabel = requester
@@ -73,10 +102,13 @@ export function buildNowPlayingEmbed(track, player, guildData) {
     const volume = guildData?.volume ?? 75;
     const queueCount = player?.queue?.length || 0;
 
-        const description = [
+    const currentLyric = getCurrentLyricLine(guildData?.lyrics, positionMs);
+
+    const description = [
         `**${track?.info?.title || 'Unknown track'}**`,
         `> *${track?.info?.author || 'Unknown'}*`,
         ``,
+        ...(currentLyric ? [`*${currentLyric}*`, ``] : []),
         `${progressBar}`,
         `\`${position}\` ─────────────── \`${duration}\``,
         ``,
