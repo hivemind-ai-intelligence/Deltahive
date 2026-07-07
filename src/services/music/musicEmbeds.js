@@ -21,7 +21,7 @@ export const MUSIC_BUTTON_IDS = {
 };
 
 export function formatDuration(ms) {
-    if (!ms || Number.isNaN(ms)) {
+    if (ms == null || Number.isNaN(ms)) {
         return 'Live';
     }
     const totalSeconds = Math.floor(ms / 1000);
