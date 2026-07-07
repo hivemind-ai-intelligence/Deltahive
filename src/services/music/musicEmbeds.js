@@ -57,33 +57,65 @@ function buildProgressBar(positionMs, durationMs, barLength = 20) {
     return '━'.repeat(filled) + '─'.repeat(empty);
 }
 
-export async function fetchSyncedLyrics(title, artist, durationMs) {
+// LRCLIB se synced lyrics try karo, nahi mila toh lyrics.ovh se plain lyrics lo
+export async function fetchLyrics(title, artist, durationMs) {
+    // Step 1: LRCLIB (synced, timestamps ke saath)
     try {
         const url = `https://lrclib.net/api/get?track_name=${encodeURIComponent(title)}&artist_name=${encodeURIComponent(artist)}&duration=${Math.floor(durationMs / 1000)}`;
-        const res = await fetch(url);
-        if (!res.ok) return null;
-        const data = await res.json();
-        if (!data.syncedLyrics) return null;
-        return data.syncedLyrics.split('\n')
-            .map(line => {
-                const m = line.match(/\[(\d+):(\d+(?:\.\d+)?)\](.*)/);
-                if (!m) return null;
-                return { time: (parseInt(m[1]) * 60 + parseFloat(m[2])) * 1000, text: m[3].trim() };
-            })
-            .filter(l => l && l.text);
-    } catch {
-        return null;
-    }
+        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        if (res.ok) {
+            const data = await res.json();
+            if (data.syncedLyrics) {
+                const lines = data.syncedLyrics.split('\n')
+                    .map(line => {
+                        const m = line.match(/\[(\d+):(\d+(?:\.\d+)?)\](.*)/);
+                        if (!m) return null;
+                        return { time: (parseInt(m[1]) * 60 + parseFloat(m[2])) * 1000, text: m[3].trim() };
+                    })
+                    .filter(l => l && l.text);
+                if (lines.length) return { type: 'synced', lines };
+            }
+        }
+    } catch { /* timeout ya error, agla try karo */ }
+
+    // Step 2: lyrics.ovh fallback (Hindi/Bollywood ke liye)
+    try {
+        const cleanArtist = artist.split(/[,&]/)[0].trim(); // pehla artist lo
+        const url = `https://lyrics.ovh/v1/${encodeURIComponent(cleanArtist)}/${encodeURIComponent(title)}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        if (res.ok) {
+            const data = await res.json();
+            if (data.lyrics) {
+                const lines = data.lyrics.split('\n').filter(l => l.trim());
+                if (lines.length) return { type: 'plain', lines };
+            }
+        }
+    } catch { /* nahi mila */ }
+
+    return null;
 }
 
-export function getCurrentLyricLine(lyrics, positionMs) {
-    if (!lyrics?.length) return null;
-    let current = null;
-    for (const line of lyrics) {
-        if (line.time <= positionMs) current = line.text;
-        else break;
+export function getCurrentLyricLine(lyrics, positionMs, durationMs) {
+    if (!lyrics) return null;
+
+    // Synced: exact timestamp se line dhundho
+    if (lyrics.type === 'synced') {
+        let current = null;
+        for (const line of lyrics.lines) {
+            if (line.time <= positionMs) current = line.text;
+            else break;
+        }
+        return current;
     }
-    return current;
+
+    // Plain: song ka ratio use karke approximate line dikhao
+    if (lyrics.type === 'plain' && lyrics.lines.length) {
+        const ratio = durationMs > 0 ? Math.min(positionMs / durationMs, 0.99) : 0;
+        const idx = Math.floor(ratio * lyrics.lines.length);
+        return lyrics.lines[idx] || null;
+    }
+
+    return null;
 }
 
 export function buildNowPlayingEmbed(track, player, guildData) {
@@ -102,7 +134,7 @@ export function buildNowPlayingEmbed(track, player, guildData) {
     const volume = guildData?.volume ?? 75;
     const queueCount = player?.queue?.length || 0;
 
-    const currentLyric = getCurrentLyricLine(guildData?.lyrics, positionMs);
+    const currentLyric = getCurrentLyricLine(guildData?.lyrics, positionMs, durationMs);
 
     const description = [
         `**${track?.info?.title || 'Unknown track'}**`,
