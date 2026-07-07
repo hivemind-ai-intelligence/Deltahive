@@ -49,12 +49,12 @@ function getLoopLabel(loop) {
     }
 }
 
-function buildProgressBar(positionMs, durationMs, barLength = 18) {
-    if (!durationMs || durationMs <= 0) return ''.padEnd(barLength, '─');
+function buildProgressBar(positionMs, durationMs, barLength = 20) {
+    if (!durationMs || durationMs <= 0) return '─'.repeat(barLength);
     const progress = Math.min(positionMs / durationMs, 1);
     const filled = Math.round(barLength * progress);
     const empty = barLength - filled;
-    return '█'.repeat(filled) + '░'.repeat(empty);
+    return '━'.repeat(filled) + '─'.repeat(empty);
 }
 
 export function buildNowPlayingEmbed(track, player, guildData) {
