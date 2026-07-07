@@ -5,7 +5,7 @@ import { getGuildMusicData, clearUpdateInterval } from './playerStore.js';
 import {
     buildNowPlayingEmbed,
     buildPlayerButtonRows,
-    fetchSyncedLyrics,
+    fetchLyrics,
 } from './musicEmbeds.js';
 
 const UPDATE_INTERVAL_MS = 5 * 1000;
@@ -105,9 +105,9 @@ export function setupPlayerHandler(client) {
                 guildData.idleTimeout = null;
             }
 
-            // Lyrics fetch (background mein, song rokta nahi)
+            // Lyrics fetch background mein (song nahi rukta)
             guildData.lyrics = null;
-            fetchSyncedLyrics(
+            fetchLyrics(
                 track?.info?.title || '',
                 track?.info?.author || '',
                 track?.info?.length || 0,
