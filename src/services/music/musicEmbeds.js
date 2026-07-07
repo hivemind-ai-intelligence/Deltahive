@@ -73,12 +73,12 @@ export function buildNowPlayingEmbed(track, player, guildData) {
     const volume = guildData?.volume ?? 75;
     const queueCount = player?.queue?.length || 0;
 
-    const description = [
+        const description = [
         `**${track?.info?.title || 'Unknown track'}**`,
         `> *${track?.info?.author || 'Unknown'}*`,
         ``,
-        `\`${progressBar}\``,
-        `\`${position}\` ─────────────────── \`${duration}\``,
+        `${progressBar}`,
+        `\`${position}\` ─────────────── \`${duration}\``,
         ``,
         `**Requester** : ${requesterLabel}`,
         `**Status**    : ${status}  |  **Loop** : ${loopLabel}`,
