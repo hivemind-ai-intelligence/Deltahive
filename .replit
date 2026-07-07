@@ -4,3 +4,55 @@ expertMode = true
 
 [nix]
 channel = "stable-25_05"
+
+[userenv]
+
+[userenv.shared]
+AUTO_MIGRATE = "true"
+CORS_ORIGIN = "*"
+LAVALINK_HOST = "localhost"
+LAVALINK_NAME = "Main"
+LAVALINK_PASSWORD = "youshallnotpass"
+LAVALINK_PORT = "2333"
+LAVALINK_REST_VERSION = "v4"
+LAVALINK_SEARCH_PLATFORM = "ytmsearch"
+LAVALINK_SECURE = "false"
+LOG_LEVEL = "warn"
+LOG_TO_FILE = "false"
+MULTI_GUILD = "false"
+NODE_ENV = "development"
+PORT = "3000"
+POSTGRES_SSL = "false"
+WEB_HOST = "0.0.0.0"
+POSTGRES_DB = "heliumdb"
+POSTGRES_HOST = "helium"
+POSTGRES_PORT = "5432"
+POSTGRES_USER = "postgres"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Start application"
+
+[[workflows.workflow]]
+name = "Start application"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "node src/app.js"
+waitForPort = 3000
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[ports]]
+localPort = 3000
+externalPort = 80
