@@ -54,10 +54,14 @@ export async function ensurePlayer(client, interaction) {
 
     const guildId = interaction.guild.id;
     const guildData = getGuildMusicData(guildId);
+    const targetVoiceChannelId = interaction.member.voice.channel.id;
     let player = getPlayer(client, guildId);
 
-    // Agar player idle hai (queue khatam ho gayi), destroy karke fresh banao
-    if (player && !player.playing && !player.paused && !player.current) {
+    // Agar player kisi doosre voice channel se connected hai, purana destroy karke naya banao.
+    // (Idle player ko SAME channel mein destroy nahi karna — warna Discord dobara
+    // VOICE_SERVER_UPDATE nahi bhejta aur naya track silently play hi nahi hota, sirf
+    // "Track Added" dikhta reh jaata hai jab tak koi aur command na chale.)
+    if (player && player.voiceChannel !== targetVoiceChannelId) {
         try { player.destroy(); } catch { /* already gone */ }
         player = null;
     }
@@ -65,10 +69,16 @@ export async function ensurePlayer(client, interaction) {
     if (!player) {
         player = client.riffy.createConnection({
             guildId,
-            voiceChannel: interaction.member.voice.channel.id,
+            voiceChannel: targetVoiceChannelId,
             textChannel: interaction.channel.id,
             deaf: true,
         });
+    }
+
+    // Pending idle-disconnect timer cancel karo — naya /play chal raha hai, player ab idle nahi hai.
+    if (guildData.idleTimeout) {
+        clearTimeout(guildData.idleTimeout);
+        guildData.idleTimeout = null;
     }
 
     // Har baar channel update karo
@@ -156,13 +166,23 @@ export async function playQuery(client, interaction, query) {
             added += 1;
         }
 
-        if (!player.playing && !player.paused && !player.current) {
+        if (added === 0) {
+            return {
+                embed: successEmbed(
+                    'No New Tracks',
+                    `All ${tracks.length} track(s) in **${playlistInfo?.name || 'Playlist'}** are already in the queue or playing.`,
+                ),
+            };
+        }
+
+        const startedNow = !player.playing && !player.paused && !player.current;
+        if (startedNow) {
             player.play();
         }
 
         return {
             embed: successEmbed(
-                'Playlist Added',
+                startedNow ? 'Now Playing Playlist' : 'Playlist Added',
                 `**${playlistInfo?.name || 'Playlist'}**\nAdded ${added} of ${tracks.length} track(s).${skipped ? ` Skipped ${skipped} duplicate(s).` : ''}`,
             ),
         };
@@ -190,15 +210,18 @@ export async function playQuery(client, interaction, query) {
         track.info.requester = interaction.user;
         player.queue.add(track);
 
-        if (!player.playing && !player.paused && !player.current) {
+        const startedNow = !player.playing && !player.paused && !player.current;
+        if (startedNow) {
             player.play();
         }
 
         return {
-            embed: successEmbed(
-                'Track Added',
-                `**${track.info.title}**\n${track.info.author}\nPosition: #${player.queue.length} in queue`,
-            ),
+            embed: startedNow
+                ? successEmbed('Now Playing', `**${track.info.title}**\n${track.info.author}`)
+                : successEmbed(
+                    'Track Added',
+                    `**${track.info.title}**\n${track.info.author}\nPosition: #${player.queue.length} in queue`,
+                ),
         };
     }
 
