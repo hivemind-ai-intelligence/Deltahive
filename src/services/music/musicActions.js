@@ -92,7 +92,13 @@ function isDuplicateTrack(player, track) {
     if (!uri) {
         return false;
     }
-    if (player.current?.info?.uri === uri) {
+    // player.current sirf tab "abhi chal raha hai" maano jab player actually
+    // playing/paused ho. Loop mode ya kisi glitch ki wajah se track khatam hone
+    // ke baad bhi player.current stale reh sakta hai (audio nahi chal raha lekin
+    // reference abhi bhi hai) — us stuck state mein duplicate maan kar block
+    // karna galat hai, isse "already in the queue or playing" ka false error aata hai.
+    const isActuallyPlaying = player.playing || player.paused;
+    if (isActuallyPlaying && player.current?.info?.uri === uri) {
         return true;
     }
     return player.queue.some((existing) => existing.info?.uri === uri);
@@ -175,7 +181,9 @@ export async function playQuery(client, interaction, query) {
             };
         }
 
-        const startedNow = !player.playing && !player.paused && !player.current;
+        // !player.current use nahi kiya — loop/glitch ki wajah se stale reh sakta
+        // hai jabki actually kuch bhi audible nahi hai. playing/paused hi bharosemand hai.
+        const startedNow = !player.playing && !player.paused;
         if (startedNow) {
             player.play();
         }
@@ -210,7 +218,9 @@ export async function playQuery(client, interaction, query) {
         track.info.requester = interaction.user;
         player.queue.add(track);
 
-        const startedNow = !player.playing && !player.paused && !player.current;
+        // !player.current use nahi kiya — loop/glitch ki wajah se stale reh sakta
+        // hai jabki actually kuch bhi audible nahi hai. playing/paused hi bharosemand hai.
+        const startedNow = !player.playing && !player.paused;
         if (startedNow) {
             player.play();
         }
