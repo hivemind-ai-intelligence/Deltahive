@@ -1,14 +1,17 @@
 // Player event handlers for Riffy. Adapted from Musicify playerHandler (Apache-2.0).
 
 import { logger } from '../../utils/logger.js';
-import { getGuildMusicData, clearUpdateInterval } from './playerStore.js';
+import { getGuildMusicData, clearUpdateInterval, clearLyricsInterval } from './playerStore.js';
 import {
     buildNowPlayingEmbed,
     buildPlayerButtonRows,
     fetchLyrics,
+    buildLyricsEmbed,
+    buildLyricsLoadingEmbed,
 } from './musicEmbeds.js';
 
-const UPDATE_INTERVAL_MS = 5 * 1000;
+const UPDATE_INTERVAL_MS = 5 * 1000;   // Now Playing embed — 5 second mein refresh
+const LYRICS_INTERVAL_MS = 3 * 1000;   // Lyrics embed — 3 second mein refresh (real-time)
 const IDLE_DISCONNECT_MS = 30 * 1000;
 
 async function editOrSendPlayerMessage(client, guildData, channelId, embed, components) {
@@ -67,6 +70,72 @@ function startUpdateInterval(client, guildId) {
     }, UPDATE_INTERVAL_MS);
 }
 
+// ── Lyrics helpers ────────────────────────────────────────────────────────────
+
+async function deleteLyricsMessage(client, guildData) {
+    if (!guildData.lyricsMessageId || !guildData.lyricsChannelId) return;
+    try {
+        const channel = client.channels.cache.get(guildData.lyricsChannelId);
+        if (channel) {
+            const msg = await channel.messages.fetch(guildData.lyricsMessageId);
+            await msg.delete();
+        }
+    } catch {
+        // Already deleted — koi baat nahi
+    }
+    guildData.lyricsMessageId = null;
+    guildData.lyricsChannelId = null;
+}
+
+export async function refreshLyricsMessage(client, guildId) {
+    try {
+        const player = client.riffy?.players?.get(guildId);
+        if (!player) return;
+
+        const guildData = getGuildMusicData(guildId);
+        if (!guildData.lyricsMessageId || !guildData.lyricsChannelId) return;
+
+        const channel = client.channels.cache.get(guildData.lyricsChannelId);
+        if (!channel) {
+            guildData.lyricsMessageId = null;
+            guildData.lyricsChannelId = null;
+            clearLyricsInterval(guildData); // orphan interval band karo
+            return;
+        }
+
+        const positionMs = player.position || 0;
+        const durationMs = player.current?.info?.length || 0;
+        const embed = buildLyricsEmbed(
+            guildData.lyrics,
+            positionMs,
+            durationMs,
+            player.current,
+        );
+
+        try {
+            const msg = await channel.messages.fetch(guildData.lyricsMessageId);
+            await msg.edit({ embeds: [embed] });
+        } catch {
+            // Message delete ho gayi — reset karo aur orphan interval band karo
+            guildData.lyricsMessageId = null;
+            guildData.lyricsChannelId = null;
+            clearLyricsInterval(guildData);
+        }
+    } catch (error) {
+        logger.error('Failed to refresh lyrics message:', error);
+    }
+}
+
+function startLyricsInterval(client, guildId) {
+    const guildData = getGuildMusicData(guildId);
+    clearLyricsInterval(guildData);
+    guildData.lyricsInterval = setInterval(() => {
+        refreshLyricsMessage(client, guildId);
+    }, LYRICS_INTERVAL_MS);
+}
+
+// ── Main event setup ──────────────────────────────────────────────────────────
+
 export function setupPlayerHandler(client) {
     if (!client.riffy) {
         logger.warn('Riffy not initialized; music player handlers not attached.');
@@ -93,6 +162,10 @@ export function setupPlayerHandler(client) {
         try {
             const guildData = getGuildMusicData(player.guildId);
 
+            // Pichle song ka lyrics embed delete karo aur interval band karo
+            clearLyricsInterval(guildData);
+            await deleteLyricsMessage(client, guildData);
+
             if (player.previous) {
                 guildData.previousTracks.push(player.previous);
                 if (guildData.previousTracks.length > 20) {
@@ -105,19 +178,45 @@ export function setupPlayerHandler(client) {
                 guildData.idleTimeout = null;
             }
 
-            // Lyrics fetch background mein (song nahi rukta)
+            // Lyrics fetch background mein — jaise hi mili, turant update karega
             guildData.lyrics = null;
+            guildData.lyricsTrackUri = track?.info?.uri ?? null; // race-guard set karo
             fetchLyrics(
                 track?.info?.title || '',
                 track?.info?.author || '',
                 track?.info?.length || 0,
-            ).then(lyrics => { guildData.lyrics = lyrics; }).catch(() => {});
+            ).then((lyrics) => {
+                // Race guard: sirf tab apply karo jab SAME track abhi bhi chal raha ho.
+                // Agar beech mein skip/change ho gaya to purani track ki lyrics nahi aayengi.
+                if (guildData.lyricsTrackUri !== (track?.info?.uri ?? null)) return;
+                guildData.lyrics = lyrics;
+                // Lyrics aayi? Turant embed update karo — interval ka wait mat karo
+                refreshLyricsMessage(client, player.guildId).catch(() => {});
+            }).catch(() => {});
 
+            // 1. Now Playing embed bhejo / edit karo
             const embed = buildNowPlayingEmbed(track, player, guildData);
             const components = buildPlayerButtonRows(player, guildData);
             const channelId = guildData.playerChannelId || player.textChannel;
             await editOrSendPlayerMessage(client, guildData, channelId, embed, components);
             startUpdateInterval(client, player.guildId);
+
+            // 2. Lyrics loading embed bhejo — alag message, NowPlaying ke neeche
+            try {
+                const lyricsChannel = client.channels.cache.get(channelId);
+                if (lyricsChannel) {
+                    const loadingEmbed = buildLyricsLoadingEmbed(track);
+                    const lyricsMsg = await lyricsChannel.send({ embeds: [loadingEmbed] });
+                    guildData.lyricsMessageId = lyricsMsg.id;
+                    guildData.lyricsChannelId = channelId;
+                }
+            } catch (err) {
+                logger.error('Could not send lyrics embed:', err);
+            }
+
+            // 3. Lyrics sync interval shuru karo (har 3 second)
+            startLyricsInterval(client, player.guildId);
+
         } catch (error) {
             logger.error('Music trackStart error:', error);
         }
@@ -127,12 +226,17 @@ export function setupPlayerHandler(client) {
         try {
             const guildData = getGuildMusicData(player.guildId);
             clearUpdateInterval(guildData);
+            clearLyricsInterval(guildData);
             guildData.lyrics = null;
 
             if (guildData.autoplay) {
+                // Autoplay: trackStart dobara fire hoga → naya lyrics embed bana dega
                 player.autoplay(player);
                 return;
             }
+
+            // Lyrics embed delete karo
+            await deleteLyricsMessage(client, guildData);
 
             if (guildData.playerMessageId && guildData.playerChannelId) {
                 try {
@@ -170,28 +274,36 @@ export function setupPlayerHandler(client) {
     });
 
     client.riffy.on('playerDisconnect', async (player) => {
-        const guildData = getGuildMusicData(player.guildId);
-        clearUpdateInterval(guildData);
-        guildData.lyrics = null;
+        try {
+            const guildData = getGuildMusicData(player.guildId);
+            clearUpdateInterval(guildData);
+            clearLyricsInterval(guildData);
+            guildData.lyrics = null;
 
-        if (guildData.playerMessageId && guildData.playerChannelId) {
-            try {
-                const channel = client.channels.cache.get(guildData.playerChannelId);
-                if (channel) {
-                    const msg = await channel.messages.fetch(guildData.playerMessageId);
-                    await msg.delete();
+            // Dono embeds delete karo
+            await deleteLyricsMessage(client, guildData);
+
+            if (guildData.playerMessageId && guildData.playerChannelId) {
+                try {
+                    const channel = client.channels.cache.get(guildData.playerChannelId);
+                    if (channel) {
+                        const msg = await channel.messages.fetch(guildData.playerMessageId);
+                        await msg.delete();
+                    }
+                } catch {
+                    // already deleted
                 }
-            } catch {
-                // already deleted
             }
-        }
 
-        guildData.playerMessageId = null;
-        guildData.playerChannelId = null;
-        guildData.previousTracks = [];
-        if (guildData.idleTimeout) {
-            clearTimeout(guildData.idleTimeout);
-            guildData.idleTimeout = null;
+            guildData.playerMessageId = null;
+            guildData.playerChannelId = null;
+            guildData.previousTracks = [];
+            if (guildData.idleTimeout) {
+                clearTimeout(guildData.idleTimeout);
+                guildData.idleTimeout = null;
+            }
+        } catch (error) {
+            logger.error('Music playerDisconnect error:', error);
         }
     });
 
