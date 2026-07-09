@@ -2,7 +2,7 @@ import { MessageFlags } from 'discord.js';
 import { successEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { TitanBotError, ErrorTypes } from '../../utils/errorHandler.js';
-import { getGuildMusicData, clearUpdateInterval } from './playerStore.js';
+import { getGuildMusicData, clearUpdateInterval, clearLyricsInterval } from './playerStore.js';
 import { canControlMusic, requireVoiceChannel, VOICE_CHANNEL_DENIAL } from './permissions.js';
 import {
     buildNowPlayingEmbed,
@@ -57,10 +57,6 @@ export async function ensurePlayer(client, interaction) {
     const targetVoiceChannelId = interaction.member.voice.channel.id;
     let player = getPlayer(client, guildId);
 
-    // Agar player kisi doosre voice channel se connected hai, purana destroy karke naya banao.
-    // (Idle player ko SAME channel mein destroy nahi karna — warna Discord dobara
-    // VOICE_SERVER_UPDATE nahi bhejta aur naya track silently play hi nahi hota, sirf
-    // "Track Added" dikhta reh jaata hai jab tak koi aur command na chale.)
     if (player && player.voiceChannel !== targetVoiceChannelId) {
         try { player.destroy(); } catch { /* already gone */ }
         player = null;
@@ -75,13 +71,11 @@ export async function ensurePlayer(client, interaction) {
         });
     }
 
-    // Pending idle-disconnect timer cancel karo — naya /play chal raha hai, player ab idle nahi hai.
     if (guildData.idleTimeout) {
         clearTimeout(guildData.idleTimeout);
         guildData.idleTimeout = null;
     }
 
-    // Har baar channel update karo
     guildData.playerChannelId = interaction.channel.id;
     player.setVolume(guildData.volume);
     return { player, guildData };
@@ -92,11 +86,6 @@ function isDuplicateTrack(player, track) {
     if (!uri) {
         return false;
     }
-    // player.current sirf tab "abhi chal raha hai" maano jab player actually
-    // playing/paused ho. Loop mode ya kisi glitch ki wajah se track khatam hone
-    // ke baad bhi player.current stale reh sakta hai (audio nahi chal raha lekin
-    // reference abhi bhi hai) — us stuck state mein duplicate maan kar block
-    // karna galat hai, isse "already in the queue or playing" ka false error aata hai.
     const isActuallyPlaying = player.playing || player.paused;
     if (isActuallyPlaying && player.current?.info?.uri === uri) {
         return true;
@@ -181,8 +170,6 @@ export async function playQuery(client, interaction, query) {
             };
         }
 
-        // !player.current use nahi kiya — loop/glitch ki wajah se stale reh sakta
-        // hai jabki actually kuch bhi audible nahi hai. playing/paused hi bharosemand hai.
         const startedNow = !player.playing && !player.paused;
         if (startedNow) {
             player.play();
@@ -218,8 +205,6 @@ export async function playQuery(client, interaction, query) {
         track.info.requester = interaction.user;
         player.queue.add(track);
 
-        // !player.current use nahi kiya — loop/glitch ki wajah se stale reh sakta
-        // hai jabki actually kuch bhi audible nahi hai. playing/paused hi bharosemand hai.
         const startedNow = !player.playing && !player.paused;
         if (startedNow) {
             player.play();
@@ -485,6 +470,7 @@ export function buildQueueReply(client, guildId, page = 0) {
 
 export async function destroyPlayerSession(client, guildId, player, guildData, { forceDisconnect = false } = {}) {
     clearUpdateInterval(guildData);
+    clearLyricsInterval(guildData);
     if (guildData.idleTimeout) {
         clearTimeout(guildData.idleTimeout);
         guildData.idleTimeout = null;
@@ -507,6 +493,21 @@ export async function destroyPlayerSession(client, guildId, player, guildData, {
 
     guildData.playerMessageId = null;
     guildData.playerChannelId = null;
+
+    // Lyrics embed bhi delete karo
+    if (guildData.lyricsMessageId && guildData.lyricsChannelId) {
+        try {
+            const channel = client.channels.cache.get(guildData.lyricsChannelId);
+            if (channel) {
+                const msg = await channel.messages.fetch(guildData.lyricsMessageId);
+                await msg.delete();
+            }
+        } catch {
+            // already deleted
+        }
+    }
+    guildData.lyricsMessageId = null;
+    guildData.lyricsChannelId = null;
 
     if (player) {
         player.queue.clear();
