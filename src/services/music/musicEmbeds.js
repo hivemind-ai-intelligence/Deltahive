@@ -1,4 +1,4 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
+import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from "discord.js";
 import { createEmbed } from "../../utils/embeds.js";
 import { getPaginationRow } from "../../utils/components.js";
 
@@ -80,7 +80,7 @@ function buildProgressBar(positionMs, durationMs, barLength = 18) {
 
 // LRCLIB se synced lyrics try karo, nahi mila toh lyrics.ovh se plain lyrics lo
 export async function fetchLyrics(title, artist, durationMs) {
-  // Step 1: LRCLIB (synced, timestamps ke saath)
+  // Step 1: LRCLIB (synced + plain, timestamps ke saath)
   try {
     const url = `https://lrclib.net/api/get?track_name=${encodeURIComponent(title)}&artist_name=${encodeURIComponent(artist)}&duration=${Math.floor(durationMs / 1000)}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
@@ -99,6 +99,11 @@ export async function fetchLyrics(title, artist, durationMs) {
           })
           .filter((l) => l && l.text);
         if (lines.length) return { type: "synced", lines };
+      }
+      // Plain lyrics bhi try karo LRCLIB se (synced nahi mila to)
+      if (data.plainLyrics) {
+        const lines = data.plainLyrics.split("\n").filter((l) => l.trim());
+        if (lines.length) return { type: "plain", lines };
       }
     }
   } catch {
@@ -291,4 +296,133 @@ export function buildQueuePaginationRow(page, totalPages) {
 
 export function getQueuePageSize() {
   return QUEUE_PAGE_SIZE;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  LYRICS EMBEDS — Naye functions, existing code untouched
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * buildLyricsLoadingEmbed — song shuru hone pe turant dikhta hai
+ * ("Dhoondh rahi hoon..." wala placeholder)
+ */
+export function buildLyricsLoadingEmbed(track) {
+  const rawTitle  = track?.info?.title  || "Unknown Track";
+  const rawArtist = track?.info?.author || "Unknown Artist";
+  const title  = rawTitle.length  > 55 ? rawTitle.slice(0, 54)  + "\u2026" : rawTitle;
+  const artist = rawArtist.length > 45 ? rawArtist.slice(0, 44) + "\u2026" : rawArtist;
+  const divider = "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500";
+
+  const description = [
+    `\uD83C\uDFB5  **${title}**`,
+    `\uD83D\uDC64  *${artist}*`,
+    "",
+    divider,
+    "",
+    "\u23F3  *Lyrics dhoondh rahi hoon...*",
+    "",
+    divider,
+    "\uD83C\uDF99\uFE0F  `-- : --`  \u00B7  \uD83D\uDD0D Searching",
+  ].join("\n");
+
+  return new EmbedBuilder()
+    .setDescription(description)
+    .setColor(0x9B59B6)
+    .setFooter({ text: "Deltahive Music \u00B7 Lyrics" });
+}
+
+/**
+ * buildLyricsEmbed — real-time lyrics card
+ * Synced: prev line (struck) → current (bold + mic emoji) → next 2 lines
+ * Plain:  estimated window of 5 lines around current position
+ * None:   "not found" message
+ */
+export function buildLyricsEmbed(lyrics, positionMs, durationMs, track) {
+  const rawTitle  = track?.info?.title  || "Unknown Track";
+  const rawArtist = track?.info?.author || "Unknown Artist";
+  const title  = rawTitle.length  > 55 ? rawTitle.slice(0, 54)  + "\u2026" : rawTitle;
+  const artist = rawArtist.length > 45 ? rawArtist.slice(0, 44) + "\u2026" : rawArtist;
+
+  const posStr  = formatDuration(positionMs);
+  const durStr  = formatDuration(durationMs);
+  const divider = "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500";
+
+  let lyricsBlock = "";
+  let typeTag     = "";
+  let color       = 0x7F8C8D;
+
+  if (!lyrics) {
+    lyricsBlock = [
+      "```",
+      "  No lyrics found for this track.",
+      "  Try searching by song name!",
+      "```",
+    ].join("\n");
+    typeTag = "\uD83D\uDD07 Not Found";
+    color   = 0x7F8C8D;
+
+  } else if (lyrics.type === "synced") {
+    color   = 0x9B59B6;
+    typeTag = "\u2728 Synced";
+
+    let currentIdx = -1;
+    for (let i = 0; i < lyrics.lines.length; i++) {
+      if (lyrics.lines[i].time <= positionMs) currentIdx = i;
+      else break;
+    }
+
+    const parts = [];
+    if (currentIdx === -1) {
+      parts.push("*\u266A  Intro...*");
+      parts.push("");
+      lyrics.lines.slice(0, 3).forEach((l) => parts.push(`> ${l.text}`));
+    } else {
+      const prev  = lyrics.lines[currentIdx - 1]?.text ?? null;
+      const cur   = lyrics.lines[currentIdx].text         || "\u266A";
+      const next1 = lyrics.lines[currentIdx + 1]?.text   ?? null;
+      const next2 = lyrics.lines[currentIdx + 2]?.text   ?? null;
+
+      if (prev)  { parts.push(`> ~~${prev}~~`); parts.push(""); }
+      parts.push(`\uD83C\uDF99\uFE0F  **${cur}**`);
+      if (next1) { parts.push(""); parts.push(`> ${next1}`); }
+      if (next2) { parts.push(`> ${next2}`); }
+    }
+    lyricsBlock = parts.join("\n");
+
+  } else if (lyrics.type === "plain") {
+    color   = 0x3498DB;
+    typeTag = "\uD83D\uDCDD Estimated";
+
+    const total  = lyrics.lines.length;
+    const ratio  = durationMs > 0 ? Math.min(positionMs / durationMs, 0.99) : 0;
+    const center = Math.floor(ratio * total);
+    const start  = Math.max(0, center - 2);
+    const end    = Math.min(total - 1, center + 3);
+
+    const parts = [];
+    for (let i = start; i <= end; i++) {
+      const line = lyrics.lines[i] || "";
+      if      (i < center)  parts.push(`> ~~${line}~~`);
+      else if (i === center) parts.push(`\uD83C\uDF99\uFE0F  **${line}**`);
+      else                   parts.push(`> ${line}`);
+    }
+    lyricsBlock = parts.join("\n");
+  }
+
+  const description = [
+    `\uD83C\uDFB5  **${title}**`,
+    `\uD83D\uDC64  *${artist}*`,
+    "",
+    divider,
+    "",
+    lyricsBlock,
+    "",
+    divider,
+    `\uD83C\uDF99\uFE0F  \`${posStr} / ${durStr}\`  \u00B7  ${typeTag}`,
+  ].join("\n");
+
+  return new EmbedBuilder()
+    .setDescription(description.slice(0, 4096))
+    .setColor(color)
+    .setFooter({ text: "Deltahive Music \u00B7 Lyrics" });
 }
